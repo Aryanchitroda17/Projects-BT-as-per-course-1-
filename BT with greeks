@@ -1,0 +1,78 @@
+import numpy as np
+import pandas as pd
+import yfinance as yf
+from scipy.stats import norm
+
+# 1. Load data
+symbol = "^NSEI"
+data = yf.download(symbol, start="2010-01-01", end="2024-01-01")["Close"]
+data = data.dropna()
+
+# 2. Params
+monthly_days = 21
+r = 0.075
+returns = data.pct_change().dropna()
+sigma = returns.std() * np.sqrt(250)
+
+# 3. Backtest
+results = []
+
+for start in range(0, len(data) - monthly_days, monthly_days):
+    try:
+        S0 = data.iloc[start].item()
+        ST = data.iloc[start + monthly_days].item()
+        K = S0  # ATM Call
+        T = monthly_days / 250
+
+        # 4. Black-Scholes + Greeks
+        d1 = (np.log(S0 / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+
+        premium = (S0 * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)).item()  # Convert to float
+        delta = norm.cdf(d1).item()
+        gamma = (norm.pdf(d1) / (S0 * sigma * np.sqrt(T))).item()
+        vega = (S0 * norm.pdf(d1) * np.sqrt(T)).item()
+
+        # 5. Payoff & P&L
+        payoff = max(ST - K, 0)
+        pnl_index = ST - S0
+        pnl_option = premium - payoff
+        total_pnl = pnl_index + pnl_option
+
+        results.append({
+            "StartDate": data.index[start].strftime("%Y-%m-%d"),
+            "S0": round(S0, 2),
+            "ST": round(ST, 2),
+            "K": round(K, 2),
+            "Premium": round(premium, 2),
+            "Payoff": round(payoff, 2),
+            "Delta": round(delta, 4),
+            "Gamma": round(gamma, 6),
+            "Vega": round(vega, 2),
+            "P&L Index": round(pnl_index, 2),
+            "P&L Option": round(pnl_option, 2),
+            "Total_PnL": round(total_pnl, 2)
+        })
+
+    except Exception as e:
+        print(f"❌ Skipped interval {start} due to: {e}")
+        continue
+
+# 6. Results
+df = pd.DataFrame(results)
+
+if not df.empty:
+    total_return = df["Total_PnL"].sum() / df["S0"].iloc[0]
+    annualized_return = (1 + total_return) ** (250 / (monthly_days * len(df))) - 1
+    max_dd = (df["Total_PnL"].cumsum().cummax() - df["Total_PnL"].cumsum()).max()
+    win_rate = (df["Total_PnL"] > 0).mean()
+
+    # Display
+    print(df.head())
+    print("\n📊 Strategy Performance with Greeks:")
+    print(f"Total Return: {total_return:.2%}")
+    print(f"Annualized Return: {annualized_return:.2%}")
+    print(f"Max Drawdown: ₹{max_dd:.2f}")
+    print(f"Win Rate: {win_rate:.2%}")
+else:
+    print("⚠️ No valid intervals processed. Check data.")
